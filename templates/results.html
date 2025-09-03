@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Contract Analysis Results</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+  />
+  <style>
+    .copy-btn {
+      font-size: 0.98em;
+      margin-left: 0.5em;
+      padding: 1px 8px;
+      border-radius: 5px;
+      background: #f3f7fa;
+      color: #007bff;
+      border: 1px solid #dee2e6;
+      cursor: pointer;
+    }
+    .copy-btn:active { color: #fff; background: #007bff; }
+    .risk-card {
+      border: 1px solid #ffd5d5; background: #fff; border-radius: 0.5rem;
+      margin-bottom: 1rem; box-shadow: 0 1px 6px 0 #eee;
+    }
+    .risk-header { background: #fff5f5; border-bottom: 1px solid #ffd5d5; padding: 0.7rem 1rem; border-radius: 0.5rem 0.5rem 0 0;}
+    .risk-body { padding: 1rem; }
+    .risk-original { color: #a5281b; font-weight: 500; }
+    .improved-legal { color: #157347; font-weight: 500; background: #f3fff5; border-radius: 3px; padding: 0.2em 0.5em; }
+    .comparison-table th, .comparison-table td { vertical-align: top; padding: 0.6em; }
+    .comparison-table th { background: #f8f9fa; }
+    .comparison-table { width: 100%; border-collapse: collapse; }
+    .download-btn { margin-top: 1.2em; }
+    .badge-pill { border-radius: 999px; }
+    .muted { color: #6c757d; }
+  </style>
+  <script>
+    function copyText(text, btn) {
+      navigator.clipboard.writeText(text).then(function () {
+        btn.innerText = "Copied!";
+        setTimeout(function () {
+          btn.innerText = "Copy";
+        }, 1200);
+      });
+    }
+  </script>
+</head>
+<body class="container my-4">
+  <div class="d-flex align-items-center justify-content-between">
+    <h2 class="mb-0">Contract Analysis Results</h2>
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge text-bg-secondary">{{ language|upper }}</span>
+      {% set rs = analysis.risk_score|default('low') %}
+      {% set rs_color = 'danger' if rs=='high' else ('warning' if rs=='medium' else 'success') %}
+      <span class="badge text-bg-{{ rs_color }}">Overall: {{ rs|capitalize }}</span>
+    </div>
+  </div>
+  <hr />
+
+  <!-- Summary -->
+  <div class="mb-3">
+    <span class="muted">Risky clauses found:</span>
+    <span class="fw-bold">{{ analysis.risk_count|default(0) }}</span>
+  </div>
+
+  <!-- Risky Clauses -->
+  <h4>Risky Clauses</h4>
+  {% if (analysis.risk_count|default(0)) == 0 %}
+    <div class="alert alert-success">No risky clauses detected 🎉</div>
+  {% else %}
+    {% for c in (analysis.clauses|default([], true)) %}
+      {% set lvl = c.risk_level|default('low') %}
+      {% set color = 'danger' if lvl=='high' else ('warning' if lvl=='medium' else 'success') %}
+      <div class="risk-card">
+        <div class="risk-header d-flex justify-content-between align-items-center">
+          <div>
+            <span class="badge text-bg-{{ color }} badge-pill me-2">{{ (lvl|capitalize) }}</span>
+            <span class="fw-semibold">{{ c.clause_type|default('clause')|replace('_',' ')|title }}</span>
+          </div>
+          {% if c.flags %}
+            <div class="small text-muted">
+              {% if c.flags.unusual %}<span class="me-2">Unusual</span>{% endif %}
+              {% if c.flags.one_sided %}<span class="me-2">One-sided</span>{% endif %}
+              {% if c.flags.missing and c.flags.missing|length > 0 %}
+                <span class="me-2">Missing: {{ c.flags.missing|join(', ') }}</span>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+        <div class="risk-body">
+          <div class="mb-2">
+            <div class="muted small mb-1">Original</div>
+            <div class="risk-original">{{ c.clause_quote }}</div>
+            {% if c.evidence_quote %}
+              <div class="small mt-2">
+                <span class="muted">Evidence:</span> “{{ c.evidence_quote }}”
+              </div>
+            {% endif %}
+          </div>
+          <div class="mb-2">
+            <div class="muted small mb-1">Why risky</div>
+            <ul class="mb-2">
+              {% for b in (c.why|default([], true)) %}
+                <li>{{ b }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          <div class="mt-2">
+            <div class="muted small mb-1">Improved clause</div>
+            <span class="improved-legal">{{ c.improved }}</span>
+            <button class="copy-btn" onclick="copyText(`{{ c.improved|replace('`','&#96;') }}`, this)">Copy</button>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  <!-- Comparison Table -->
+  {% if (analysis.clauses|default([], true))|length > 0 %}
+    <h4 class="mt-4">Comparison Table</h4>
+    <table class="comparison-table table table-sm table-bordered">
+      <thead>
+        <tr>
+          <th style="width:50%">Original Clause</th>
+          <th style="width:50%">Improved (Legal Wording)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in (analysis.clauses|default([], true)) %}
+          <tr>
+            <td style="max-width: 480px; word-break: break-word;">{{ c.clause_quote }}</td>
+            <td style="max-width: 480px; word-break: break-word;">
+              {{ c.improved }}
+              <button class="copy-btn" onclick="copyText(`{{ c.improved|replace('`','&#96;') }}`, this)">Copy</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <!-- Alerts -->
+  {% if (analysis.alerts|default([], true))|length > 0 %}
+    <h4 class="mt-4">Alerts</h4>
+    <div class="list-group mb-3">
+      {% for a in (analysis.alerts|default([], true)) %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <strong>{{ a.key|replace('_',' ')|title }}</strong>
+          </div>
+          <div class="mt-1">{{ a.why }}</div>
+          {% if a.evidence_quote %}
+            <div class="small mt-1"><span class="muted">Evidence:</span> “{{ a.evidence_quote }}”</div>
+          {% endif %}
+          {% if a.suggested_wording %}
+            <div class="small mt-2 muted">Suggested wording</div>
+            <div class="p-2 border rounded bg-light">
+              {{ a.suggested_wording }}
+              <button class="copy-btn" onclick="copyText(`{{ a.suggested_wording|replace('`','&#96;') }}`, this)">Copy</button>
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <!-- FAQ -->
+  {% if (analysis.faq|default([], true))|length > 0 %}
+    <h4 class="mt-4">FAQ</h4>
+    <div class="accordion" id="faqAccordion">
+      {% for qa in (analysis.faq|default([], true)) %}
+        {% set lvl = qa.risk_level|default('low') %}
+        {% set color = 'danger' if lvl=='high' else ('warning' if lvl=='medium' else 'secondary') %}
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="h{{ loop.index }}">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ loop.index }}" aria-expanded="false" aria-controls="c{{ loop.index }}">
+              <span class="badge text-bg-{{ color }} me-2">{{ lvl|capitalize }}</span>
+              {{ qa.question }}
+            </button>
+          </h2>
+          <div id="c{{ loop.index }}" class="accordion-collapse collapse" aria-labelledby="h{{ loop.index }}" data-bs-parent="#faqAccordion">
+            <div class="accordion-body">
+              <div class="mb-2">{{ qa.answer }}</div>
+              <div class="small muted">
+                {% if qa.related_clause_type %}<span class="me-3">Related: {{ qa.related_clause_type|replace('_',' ')|title }}</span>{% endif %}
+                {% if qa.section_hint %}<span>Section: {{ qa.section_hint }}</span>{% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <!-- Download + Actions -->
+  <div class="download-btn">
+    <a href="{{ url_for('static_files', filename=docx_path) }}" class="btn btn-success btn-sm" download>
+      Download Word Report
+    </a>
+  </div>
+
+  <div class="mt-4">
+    <a href="{{ url_for('index') }}" class="btn btn-outline-primary">Analyze Another Contract</a>
+    {% if not is_premium %}
+      <a href="{{ url_for('login') }}" class="btn btn-link ms-2">Premium Login</a>
+    {% else %}
+      <a href="{{ url_for('logout') }}" class="btn btn-link ms-2">Logout</a>
+    {% endif %}
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

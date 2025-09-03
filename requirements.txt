@@ -1,0 +1,11 @@
+Flask
+python-dotenv
+PyPDF2
+spacy
+nltk
+python-docx
+langdetect
+openai
+docx2pdf
+gunicorn
+transformers

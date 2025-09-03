@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Bulk Contract Analysis Results</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+<div class="container py-4">
+    <h2>Bulk Contract Analysis Summary</h2>
+    <div class="mb-3">
+        <b>Total Contracts:</b> {{ summary.total_contracts }}<br>
+        <b>Total Risky Clauses:</b> {{ summary.total_risk }}
+    </div>
+    <table class="table table-bordered">
+        <thead>
+            <tr>
+                <th>Contract Name</th>
+                <th>Language</th>
+                <th># Risks</th>
+                <th>Download Improved</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in results %}
+            <tr>
+                <td>{{ r.filename }}</td>
+                <td>{{ r.lang|capitalize }}</td>
+                <td>{{ r.analysis.clauses|length }}</td>
+                <td>
+                    <a href="{{ url_for('static_files', filename=r.docx_path) }}" class="btn btn-sm btn-success" download>
+                        Download .docx
+                    </a>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <a href="{{ url_for('index') }}" class="btn btn-link mt-3">Back to Upload</a>
+</div>
+</body>
+</html>

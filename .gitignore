@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+ENV/
+# Secrets
+.env
+.env.*
+# macOS
+.DS_Store
+# Logs & local state
+*.log
+analytics.log
+usage.json
+# IDE
+.vscode/
+.idea/
+# App outputs / uploads
+uploads/
+static/*
+!static/.gitkeep
+# Documents/binaries (keep repo light)
+*.docx
+*.pdf
+# NLP caches/models
+en_core_web_sm/
+ru_core_news_sm/
+*.cache/
