@@ -40,9 +40,14 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
     MAX_CONTENT_LENGTH=20*1024*1024,  # чтобы большие файлы не падали
 )
+from flask_cors import CORS
+import re
 
-CORS(app, supports_credentials=True,
-     resources={r"/*": {"origins": r"https://.*\.lovable\.app"}})
+CORS(
+    app,
+    supports_credentials=True,
+    resources={r"/*": {"origins": re.compile(r"^https://.*\.lovable\.app$")}}
+)
 
 # Use env, never hard-code secrets
 
