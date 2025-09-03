@@ -42,7 +42,7 @@ app.config.update(
 )
 
 CORS(app, supports_credentials=True,
-     resources={r"/*": {"origins": ["https://parafix.lovable.app"]}})
+     resources={r"/*": {"origins": r"https://.*\.lovable\.app"}})
 
 # Use env, never hard-code secrets
 
