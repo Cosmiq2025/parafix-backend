@@ -17,6 +17,8 @@ from docx.shared import RGBColor
 from langdetect import detect
 from openai import OpenAI
 from dotenv import load_dotenv
+from flask_cors import CORS
+from flask import jsonify  # если ещё не импортировал
 
 try:
     from docx2pdf import convert
@@ -30,8 +32,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-from flask_cors import CORS
-from flask import jsonify  # если ещё не импортировал
+
 
 app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY", "change-me"),
@@ -40,8 +41,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
     MAX_CONTENT_LENGTH=20*1024*1024,  # чтобы большие файлы не падали
 )
-from flask_cors import CORS
-import re
+
 
 CORS(
     app,
