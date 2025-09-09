@@ -18,6 +18,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from flask_cors import CORS
 from flask import jsonify  # если ещё не импортировал
+from flask_session import Session
+from time import time
 
 try:
     from docx2pdf import convert
@@ -31,21 +33,74 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})  # ← эту строку вставь сразу после
-
 
 app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY", "change-me"),
-    SESSION_COOKIE_NAME="parafix_session",
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=True,
-    MAX_CONTENT_LENGTH=20*1024*1024,  # чтобы большие файлы не падали
+    MAX_CONTENT_LENGTH=20*1024*1024,
+    SESSION_TYPE="filesystem",
+    SESSION_FILE_DIR=os.path.join("/tmp", "flask_session"),
+    SESSION_PERMANENT=False,
+    SESSION_COOKIE_NAME="parafix_sid",
+    SESSION_COOKIE_HTTPONLY=True,
+    PREFERRED_URL_SCHEME="https",
 )
 
-# Use env, never hard-code secrets
+Path("/tmp/flask_session").mkdir(parents=True, exist_ok=True)
+Session(app)
+
+# CORS (single source of truth)
+FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
+CORS(
+    app,
+    supports_credentials=True,
+    resources={
+        r"/api/*": {"origins": FRONTEND_ORIGINS},
+        r"/login": {"origins": FRONTEND_ORIGINS},
+        r"/logout": {"origins": FRONTEND_ORIGINS},
+    },
+)
+
+# Kill old fat cookie (define once, after CORS)
+@app.after_request
+def kill_legacy_cookie(resp):
+    resp.delete_cookie("parafix_session", path="/")
+    return resp
+
+
+
+Path("/tmp/flask_session").mkdir(parents=True, exist_ok=True)
+Session(app)
+
+# after: Session(app)
+# then:
+FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
+
+CORS(
+    app,
+    supports_credentials=True,
+    resources={
+        r"/api/*": {"origins": FRONTEND_ORIGINS},
+        r"/login": {"origins": FRONTEND_ORIGINS},
+        r"/logout": {"origins": FRONTEND_ORIGINS},
+    },
+)
 
 # 20 MB upload cap
+# after app = Flask(__name__)
+FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
 
+CORS(
+    app,
+    supports_credentials=True,
+    resources={r"/api/*": {"origins": FRONTEND_ORIGINS}},
+)
+
+@app.after_request
+def kill_legacy_cookie(resp):
+    resp.delete_cookie("parafix_session", path="/")
+    return resp
 
 UPLOAD_FOLDER = 'uploads'
 STATIC_FOLDER = 'static'
@@ -95,7 +150,6 @@ def cleanup_static_folder(days=1):
 # --- TEXT EXTRACTION ---
 def extract_text_from_pdf(pdf_path):
     logger.info("Extracting text from PDF (PyMuPDF)")
-    import fitz  # PyMuPDF
     with fitz.open(pdf_path) as doc:
         return "\n".join(page.get_text("text") for page in doc).strip()
     
@@ -510,6 +564,7 @@ def index():
     return render_template('index.html', is_premium=session.get('is_premium', False))
 # --- JSON API for Lovable (no templates, just JSON) ---
 @app.post("/api/analyze")
+
 def api_analyze():
     cleanup_static_folder(days=1)
 
@@ -547,7 +602,7 @@ def api_analyze():
 
         is_premium = bool(session.get('is_premium'))
 
-        # Analyze + Report (reuse your existing helpers)
+        # Analyze + Report
         analysis = analyze_contract(text, language, is_premium=is_premium)
         report_doc = generate_report_docx(analysis, language)
         base_name = os.path.splitext(filename)[0]
@@ -570,15 +625,22 @@ def api_analyze():
         if os.path.exists(filepath):
             os.remove(filepath)
 
-        # Save for Results page (session-backed)
-        session["analysis"] = analysis
+        # ⚠️ ВАЖНО: вместо жирной cookie — сохраняем JSON на диск и кладём в сессию только маленький ID
+        analysis_id = str(uuid.uuid4())[:8]
+        json_name = f"analysis_{analysis_id}.json"
+        json_path = os.path.join(STATIC_FOLDER, json_name)
+        with open(json_path, "w", encoding="utf-8") as jf:
+            json.dump(analysis, jf, ensure_ascii=False)
+
+        session["analysis_id"] = analysis_id
         session["docx_path"] = report_name
         session["language"] = language
 
         return jsonify({
             "analysis": analysis,
             "docx_path": report_name,
-            "language": language
+            "language": language,
+            "analysis_id": analysis_id
         }), 200
 
     except Exception as e:
@@ -590,17 +652,26 @@ def api_analyze():
 
 @app.get("/api/analysis/latest")
 def api_analysis_latest():
+    analysis = {}
+    analysis_id = session.get("analysis_id")
+    if analysis_id:
+        path = os.path.join(STATIC_FOLDER, f"analysis_{analysis_id}.json")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as jf:
+                analysis = json.load(jf)
+
     return jsonify({
-        "analysis": session.get("analysis", {}),
+        "analysis": analysis,
         "docx_path": session.get("docx_path", ""),
-        "language": session.get("language", "en")
+        "language": session.get("language", "en"),
+        "analysis_id": analysis_id
     }), 200
+
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_file_too_large(error):
     flash("File is too large! Maximum upload size is 20 MB.", "danger")
     return redirect(url_for('index'))
-from time import time
 
 @app.route("/health", methods=["GET"])
 def health_root():
