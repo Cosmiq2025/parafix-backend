@@ -18,7 +18,6 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from flask_cors import CORS
 from flask import jsonify  # если ещё не импортировал
-from flask_session import Session
 from time import time
 
 try:
@@ -34,80 +33,52 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# ---- Cookies & sessions (built-in Flask cookies, not Flask-Session) ----
 app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY", "change-me"),
-    SESSION_COOKIE_SAMESITE="None",
-    SESSION_COOKIE_SECURE=True,
-    MAX_CONTENT_LENGTH=20*1024*1024,
-    SESSION_TYPE="filesystem",
-    SESSION_FILE_DIR=os.path.join("/tmp", "flask_session"),
-    SESSION_PERMANENT=False,
-    SESSION_COOKIE_NAME="parafix_sid",
+    SESSION_COOKIE_SAMESITE="None",   # allow cross-site cookie (Lovable -> Render)
+    SESSION_COOKIE_SECURE=True,       # required with SameSite=None (needs HTTPS)
     SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_NAME="parafix_sid",
+    # REMOVE Flask-Session settings (we're not using that extension right now):
+    # SESSION_TYPE="filesystem",
+    # SESSION_FILE_DIR=os.path.join("/tmp", "flask_session"),
+    # SESSION_PERMANENT=False,
+    MAX_CONTENT_LENGTH=20 * 1024 * 1024,
     PREFERRED_URL_SCHEME="https",
 )
 
-Path("/tmp/flask_session").mkdir(parents=True, exist_ok=True)
-Session(app)
+# ---- CORS (must be exact domain; no '*') ----
+# Put your real Lovable domain(s) here. You can list both preview and published.
+ALLOWED_ORIGINS = [
+    "https://preview--parafix.lovable.app/",          # e.g. https://c753083a-b43d-...
+    "https://YOUR-PUBLISHED-SITE-DOMAIN"    # optional second origin
+]
 
-# CORS (single source of truth)
-FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
 CORS(
     app,
-    supports_credentials=True,
-    resources={
-        r"/api/*": {"origins": FRONTEND_ORIGINS},
-        r"/login": {"origins": FRONTEND_ORIGINS},
-        r"/logout": {"origins": FRONTEND_ORIGINS},
-    },
+    supports_credentials=True,  # allow cookies to cross origin
+    resources={r"/api/*": {"origins": ALLOWED_ORIGINS}},
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["Set-Cookie"],   # optional; helps tools see cookies
 )
 
-# Kill old fat cookie (define once, after CORS)
+
+# Kill old fat cookie (once)
 @app.after_request
 def kill_legacy_cookie(resp):
     resp.delete_cookie("parafix_session", path="/")
     return resp
 
-
-
-Path("/tmp/flask_session").mkdir(parents=True, exist_ok=True)
-Session(app)
-
-# after: Session(app)
-# then:
-FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
-
-CORS(
-    app,
-    supports_credentials=True,
-    resources={
-        r"/api/*": {"origins": FRONTEND_ORIGINS},
-        r"/login": {"origins": FRONTEND_ORIGINS},
-        r"/logout": {"origins": FRONTEND_ORIGINS},
-    },
-)
-
-# 20 MB upload cap
-# after app = Flask(__name__)
-FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173").split(",")
-
-CORS(
-    app,
-    supports_credentials=True,
-    resources={r"/api/*": {"origins": FRONTEND_ORIGINS}},
-)
-
-@app.after_request
-def kill_legacy_cookie(resp):
-    resp.delete_cookie("parafix_session", path="/")
-    return resp
-
-UPLOAD_FOLDER = 'uploads'
-STATIC_FOLDER = 'static'
+# --- File system paths ---
+UPLOAD_FOLDER = "uploads"
+STATIC_FOLDER = "static"
 Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
 Path(STATIC_FOLDER).mkdir(parents=True, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['STATIC_FOLDER'] = STATIC_FOLDER
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["STATIC_FOLDER"] = STATIC_FOLDER
+
 
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
