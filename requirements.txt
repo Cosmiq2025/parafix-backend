@@ -10,3 +10,5 @@ docx2pdf
 gunicorn
 transformers
 flask-cors==6.0.1
+pymupdf
+
