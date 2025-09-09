@@ -11,4 +11,19 @@ gunicorn
 transformers
 flask-cors==6.0.1
 pymupdf
+Flask-Session==0.6.0
+Flask-Session==0.5.0
+Flask-Cors==4.0.0
+gunicorn==21.2.0
+# Only if you choose Redis storage:
+redis==5.0.7
+Flask==3.0.3
+Flask-Cors==4.0.0
+python-docx==1.1.2
+PyMuPDF==1.24.9
+langdetect==1.0.9
+spacy==3.7.5
+openai==1.40.0
+# If you keep server-side sessions:
+# Flask-Session==0.5.0
 
