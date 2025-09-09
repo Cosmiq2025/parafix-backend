@@ -52,7 +52,6 @@ app.config.update(
 # Put your real Lovable domain(s) here. You can list both preview and published.
 ALLOWED_ORIGINS = [
     "https://preview--parafix.lovable.app/",          # e.g. https://c753083a-b43d-...
-    "https://YOUR-PUBLISHED-SITE-DOMAIN"    # optional second origin
 ]
 
 CORS(
@@ -535,7 +534,6 @@ def index():
     return render_template('index.html', is_premium=session.get('is_premium', False))
 # --- JSON API for Lovable (no templates, just JSON) ---
 @app.post("/api/analyze")
-
 def api_analyze():
     cleanup_static_folder(days=1)
 
