@@ -5,12 +5,11 @@ import logging
 import datetime
 import uuid
 from pathlib import Path
+import fitz  # PyMuPDF
 
 from flask import Flask, render_template, request, flash, url_for, redirect, send_from_directory, session
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
-
-import PyPDF2
 import spacy
 from docx import Document
 from docx.shared import RGBColor
@@ -32,6 +31,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})  # ← эту строку вставь сразу после
 
 
 app.config.update(
@@ -40,13 +40,6 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=True,
     MAX_CONTENT_LENGTH=20*1024*1024,  # чтобы большие файлы не падали
-)
-
-
-CORS(
-    app,
-    supports_credentials=True,
-    resources={r"/*": {"origins": re.compile(r"^https://.*\.lovable\.app$")}}
 )
 
 # Use env, never hard-code secrets
@@ -101,19 +94,11 @@ def cleanup_static_folder(days=1):
 
 # --- TEXT EXTRACTION ---
 def extract_text_from_pdf(pdf_path):
-    logger.info("Extracting text from PDF")
-    text = ""
-    try:
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            for page in reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-    except Exception as e:
-        logger.error(f"PDF extraction failed: {str(e)}")
-        raise
-    return text.strip()
+    logger.info("Extracting text from PDF (PyMuPDF)")
+    import fitz  # PyMuPDF
+    with fitz.open(pdf_path) as doc:
+        return "\n".join(page.get_text("text") for page in doc).strip()
+    
 
 def extract_text_from_docx(docx_path):
     logger.info("Extracting text from DOCX")
@@ -615,6 +600,20 @@ def api_analysis_latest():
 def handle_file_too_large(error):
     flash("File is too large! Maximum upload size is 20 MB.", "danger")
     return redirect(url_for('index'))
+from time import time
+
+@app.route("/health", methods=["GET"])
+def health_root():
+    return jsonify(ok=True, ts=int(time()))
+
+@app.route("/api/health", methods=["GET"])
+def health_api():
+    return jsonify(ok=True, ts=int(time()))
+
+# --- Debug: list all routes live ---
+@app.get("/__routes")
+def list_routes():
+    return jsonify(sorted(str(r) for r in app.url_map.iter_rules()))
 
 if __name__ == '__main__':
     app.run(debug=True)
