@@ -615,5 +615,16 @@ def health_api():
 def list_routes():
     return jsonify(sorted(str(r) for r in app.url_map.iter_rules()))
 
+# --- Debug: show running commit and routes ---
+BUILD = os.getenv("RENDER_GIT_COMMIT", "dev")[:7]
+
+@app.get("/version")
+def version():
+    return jsonify(
+        commit=BUILD,
+        routes=sorted(r.rule for r in app.url_map.iter_rules())
+    )
+
+
 if __name__ == '__main__':
     app.run(debug=True)
