@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from flask_cors import CORS
 from flask import jsonify  # если ещё не импортировал
 from time import time
+from flask_cors import CORS, cross_origin
 
 try:
     from docx2pdf import convert
@@ -50,9 +51,11 @@ app.config.update(
 
 # ---- CORS (must be exact domain; no '*') ----
 # Put your real Lovable domain(s) here. You can list both preview and published.
+# ---- CORS ----
 ALLOWED_ORIGINS = [
-    "https://preview--parafix.lovable.app/",          # e.g. https://c753083a-b43d-...
+    "https://preview--parafix.lovable.app"  # no trailing /
 ]
+
 
 CORS(
     app,
@@ -534,6 +537,13 @@ def index():
     return render_template('index.html', is_premium=session.get('is_premium', False))
 # --- JSON API for Lovable (no templates, just JSON) ---
 @app.post("/api/analyze")
+@cross_origin(
+    origins="https://preview--parafix.lovable.app",
+    supports_credentials=True,
+    methods=["POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["Set-Cookie"],
+)
 def api_analyze():
     cleanup_static_folder(days=1)
 
