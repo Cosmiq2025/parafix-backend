@@ -1,24 +1,25 @@
 import os
-import re
 import json
 import logging
 import datetime
 import uuid
 from pathlib import Path
-import fitz  # PyMuPDF
+from time import time
 
-from flask import Flask, render_template, request, flash, url_for, redirect, send_from_directory, session
-from werkzeug.utils import secure_filename
-from werkzeug.exceptions import RequestEntityTooLarge
+import fitz  # PyMuPDF
 import spacy
 from docx import Document
 from docx.shared import RGBColor
 from langdetect import detect
 from openai import OpenAI
 from dotenv import load_dotenv
-from flask import jsonify  # если ещё не импортировал
-from time import time
-from flask import request, jsonify, make_response
+
+from flask import (
+    Flask, render_template, request, flash, url_for, redirect,
+    send_from_directory, session, jsonify, make_response
+)
+from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 
 try:
     from docx2pdf import convert
@@ -32,150 +33,50 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-from flask import make_response, request
-# --- FINAL WSGI-LEVEL CORS SANITIZER FOR /api/* ---
-class CORSSanitizerMiddleware:
-    def __init__(self, app):
-        self.app = app
 
-    def __call__(self, environ, start_response):
-        path = (environ.get("PATH_INFO") or "")
-        method = (environ.get("REQUEST_METHOD") or "GET").upper()
-
-        # Short-circuit real preflights BEFORE Flask runs
-        if path.startswith("/api/") and method == "OPTIONS":
-            headers = [
-                ("Access-Control-Allow-Origin", "*"),
-                ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-                ("Access-Control-Allow-Headers", "Content-Type"),
-                ("Access-Control-Max-Age", "86400"),
-                ("Vary", "Origin"),
-                ("Cache-Control", "no-store"),
-            ]
-            start_response("204 No Content", headers)
-            return [b""]
-
-        # Otherwise, run the app and then sanitize headers
-        def cors_start_response(status, headers, exc_info=None):
-            if path.startswith("/api/"):
-                # Remove any cookies/credentialed CORS that leaked in
-                filtered = []
-                for k, v in headers:
-                    kl = k.lower()
-                    if kl in ("set-cookie",
-                              "access-control-allow-credentials",
-                              "access-control-expose-headers"):
-                        continue
-                    filtered.append((k, v))
-                headers = filtered
-
-                # Enforce stateless CORS
-                # (either set or overwrite existing)
-                def put(name, val):
-                    # overwrite if exists
-                    for i, (k, _) in enumerate(headers):
-                        if k.lower() == name.lower():
-                            headers[i] = (name, val)
-                            break
-                    else:
-                        headers.append((name, val))
-
-                put("Access-Control-Allow-Origin", "*")
-                put("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                put("Access-Control-Allow-Headers", "Content-Type")
-                put("Access-Control-Max-Age", "86400")
-                put("Vary", "Origin")
-                put("Cache-Control", "no-store")
-
-                # If some auto handler set Allow on OPTIONS, we ignore it here.
-                if method == "OPTIONS":
-                    # Force a real preflight semantics if needed
-                    status = "204 No Content"
-
-            return start_response(status, headers, exc_info)
-
-        return self.app(environ, cors_start_response)
-
-# Wrap the Flask app
-app.wsgi_app = CORSSanitizerMiddleware(app.wsgi_app)
-
-@app.before_request
-def short_circuit_api_options():
-    # Return our own preflight before any other handler/middleware runs
-    if request.method == "OPTIONS" and request.path.startswith("/api/"):
-        resp = make_response("", 204)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        resp.headers["Access-Control-Max-Age"] = "86400"
-        resp.headers["X-Parafix-Preflight"] = "1"
-        return resp
-from flask.sessions import SecureCookieSessionInterface
-
-class ApiNoSessionInterface(SecureCookieSessionInterface):
-    def save_session(self, app, session, response):
-        # Never set a session cookie for API routes (OPTIONS/POST/GET)
-        if request.path.startswith("/api/"):
-            return
-        return super().save_session(app, session, response)
-
-app.session_interface = ApiNoSessionInterface()
-
-# ---- Cookies & sessions (built-in Flask cookies, not Flask-Session) ----
-app.config.update(
-    SECRET_KEY=os.environ.get("SECRET_KEY", "change-me"),
-    SESSION_COOKIE_SAMESITE="None",   # allow cross-site cookie (Lovable -> Render)
-    SESSION_COOKIE_SECURE=True,       # required with SameSite=None (needs HTTPS)
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_NAME="parafix_sid",
-    # REMOVE Flask-Session settings (we're not using that extension right now):
-    # SESSION_TYPE="filesystem",
-    # SESSION_FILE_DIR=os.path.join("/tmp", "flask_session"),
-    # SESSION_PERMANENT=False,
-    MAX_CONTENT_LENGTH=20 * 1024 * 1024,
-    PREFERRED_URL_SCHEME="https",
+# ---- CORS (credentialed; echo only allowlisted origins) ----
+ALLOWED_ORIGINS = set(
+    os.getenv("CORS_ALLOWLIST", "https://preview--parafix.lovable.app").split(",")
 )
 
-app.config["SESSION_REFRESH_EACH_REQUEST"] = False
-
-# ---- FINAL OVERRIDE: make all /api/* calls stateless + proper CORS ----
-@app.after_request
-def _final_api_cors_override(resp):
+def corsify(resp):
     try:
-        p = request.path or ""
-        if p.startswith("/api/"):
-            # Always stateless CORS
-            resp.headers["Access-Control-Allow-Origin"] = "*"
+        if request.path.startswith("/api/"):
+            origin = request.headers.get("Origin", "")
+            if origin in ALLOWED_ORIGINS:
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers["Access-Control-Allow-Credentials"] = "true"
+            else:
+                # Never use "*" with credentials; make it explicit "null" if not allowed
+                resp.headers["Access-Control-Allow-Origin"] = "null"
+            resp.headers["Vary"] = "Origin"
             resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
             resp.headers["Access-Control-Max-Age"] = "86400"
-            # Strip any credentialed leftovers from other middlewares
-            for h in ("Access-Control-Allow-Credentials", "Access-Control-Expose-Headers", "Set-Cookie"):
-                resp.headers.pop(h, None)
-
-            if request.method == "OPTIONS":
-                # If Flask auto-OPTIONS already fired with 200, force it to be a real preflight
-                resp.status_code = 204
-                resp.set_data(b"")
-                # Optional debug marker (helps confirm this ran)
-                resp.headers["X-Parafix-Preflight"] = "1"
-                # 'Allow' header is not needed for preflight
-                resp.headers.pop("Allow", None)
     except Exception:
         pass
     return resp
 
+@app.after_request
+def apply_cors(resp):
+    return corsify(resp)
 
+# Generic preflight for ANY /api/* path
+@app.route("/api/<path:_rest>", methods=["OPTIONS"])
+def any_preflight(_rest):
+    return corsify(make_response("", 204))
 
-@app.route("/api/analyze", methods=["OPTIONS"])
-def analyze_preflight():
-    resp = make_response("", 204)
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    resp.headers["Access-Control-Max-Age"] = "86400"
-    resp.headers["X-Parafix-Preflight"] = "1"   # <— debug
-    return resp
+# ---- Cookies & sessions (Flask’s cookie sessions) ----
+app.config.update(
+    SECRET_KEY=os.environ.get("SECRET_KEY", "change-me"),
+    SESSION_COOKIE_SAMESITE="None",   # allow cross-site cookie (Lovable -> Render)
+    SESSION_COOKIE_SECURE=True,       # required with SameSite=None (HTTPS)
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_NAME="parafix_sid",
+    MAX_CONTENT_LENGTH=20 * 1024 * 1024,
+    PREFERRED_URL_SCHEME="https",
+)
+app.config["SESSION_REFRESH_EACH_REQUEST"] = False
 
 # --- File system paths ---
 UPLOAD_FOLDER = "uploads"
@@ -184,7 +85,6 @@ Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
 Path(STATIC_FOLDER).mkdir(parents=True, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["STATIC_FOLDER"] = STATIC_FOLDER
-
 
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
@@ -229,7 +129,6 @@ def extract_text_from_pdf(pdf_path):
     logger.info("Extracting text from PDF (PyMuPDF)")
     with fitz.open(pdf_path) as doc:
         return "\n".join(page.get_text("text") for page in doc).strip()
-    
 
 def extract_text_from_docx(docx_path):
     logger.info("Extracting text from DOCX")
@@ -639,12 +538,13 @@ def index():
             return redirect(url_for('index'))
 
     return render_template('index.html', is_premium=session.get('is_premium', False))
-# --- JSON API for Lovable (no templates, just JSON) ---
-@app.route("/api/analyze", methods=["POST"], provide_automatic_options=False)
+
+# --- JSON API for Lovable (credentialed CORS; cookies allowed) ---
+@app.route("/api/analyze", methods=["POST"])
 def api_analyze():
     cleanup_static_folder(days=1)
 
-    # Stateless MVP: no session/auth here; wire JWT or header later if needed
+    # Stateless for now (no JWT). We can wire auth later.
     is_premium = False
 
     file = request.files.get('file')
@@ -702,14 +602,18 @@ def api_analyze():
         if os.path.exists(filepath):
             os.remove(filepath)
 
-        # Save analysis JSON to static (client can fetch/download)
+        # Save analysis JSON to static (optional client fetch)
         analysis_id = str(uuid.uuid4())[:8]
         json_name = f"analysis_{analysis_id}.json"
         json_path = os.path.join(STATIC_FOLDER, json_name)
         with open(json_path, "w", encoding="utf-8") as jf:
             json.dump(analysis, jf, ensure_ascii=False)
 
-        # Return JSON — CORS headers will be added by @after_request
+        # Store session pointers so /api/analysis/latest works from the browser
+        session['analysis_id'] = analysis_id
+        session['docx_path'] = report_name
+        session['language'] = language
+
         return jsonify({
             "analysis": analysis,
             "docx_path": report_name,
@@ -722,8 +626,6 @@ def api_analyze():
         if os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({"error": f"Error processing contract: {str(e)}"}), 500
-
-
 
 @app.get("/api/analysis/latest")
 def api_analysis_latest():
@@ -741,7 +643,6 @@ def api_analysis_latest():
         "language": session.get("language", "en"),
         "analysis_id": analysis_id
     }), 200
-
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_file_too_large(error):
@@ -770,8 +671,6 @@ def version():
         commit=BUILD,
         routes=sorted(r.rule for r in app.url_map.iter_rules())
     )
-       
-
 
 if __name__ == '__main__':
     app.run(debug=True)
