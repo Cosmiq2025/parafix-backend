@@ -16,10 +16,9 @@ from docx.shared import RGBColor
 from langdetect import detect
 from openai import OpenAI
 from dotenv import load_dotenv
-from flask_cors import CORS
 from flask import jsonify  # если ещё не импортировал
 from time import time
-from flask_cors import CORS, cross_origin
+from flask import request, jsonify, make_response
 
 try:
     from docx2pdf import convert
@@ -33,6 +32,94 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+from flask import make_response, request
+# --- FINAL WSGI-LEVEL CORS SANITIZER FOR /api/* ---
+class CORSSanitizerMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        path = (environ.get("PATH_INFO") or "")
+        method = (environ.get("REQUEST_METHOD") or "GET").upper()
+
+        # Short-circuit real preflights BEFORE Flask runs
+        if path.startswith("/api/") and method == "OPTIONS":
+            headers = [
+                ("Access-Control-Allow-Origin", "*"),
+                ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+                ("Access-Control-Allow-Headers", "Content-Type"),
+                ("Access-Control-Max-Age", "86400"),
+                ("Vary", "Origin"),
+                ("Cache-Control", "no-store"),
+            ]
+            start_response("204 No Content", headers)
+            return [b""]
+
+        # Otherwise, run the app and then sanitize headers
+        def cors_start_response(status, headers, exc_info=None):
+            if path.startswith("/api/"):
+                # Remove any cookies/credentialed CORS that leaked in
+                filtered = []
+                for k, v in headers:
+                    kl = k.lower()
+                    if kl in ("set-cookie",
+                              "access-control-allow-credentials",
+                              "access-control-expose-headers"):
+                        continue
+                    filtered.append((k, v))
+                headers = filtered
+
+                # Enforce stateless CORS
+                # (either set or overwrite existing)
+                def put(name, val):
+                    # overwrite if exists
+                    for i, (k, _) in enumerate(headers):
+                        if k.lower() == name.lower():
+                            headers[i] = (name, val)
+                            break
+                    else:
+                        headers.append((name, val))
+
+                put("Access-Control-Allow-Origin", "*")
+                put("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                put("Access-Control-Allow-Headers", "Content-Type")
+                put("Access-Control-Max-Age", "86400")
+                put("Vary", "Origin")
+                put("Cache-Control", "no-store")
+
+                # If some auto handler set Allow on OPTIONS, we ignore it here.
+                if method == "OPTIONS":
+                    # Force a real preflight semantics if needed
+                    status = "204 No Content"
+
+            return start_response(status, headers, exc_info)
+
+        return self.app(environ, cors_start_response)
+
+# Wrap the Flask app
+app.wsgi_app = CORSSanitizerMiddleware(app.wsgi_app)
+
+@app.before_request
+def short_circuit_api_options():
+    # Return our own preflight before any other handler/middleware runs
+    if request.method == "OPTIONS" and request.path.startswith("/api/"):
+        resp = make_response("", 204)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Max-Age"] = "86400"
+        resp.headers["X-Parafix-Preflight"] = "1"
+        return resp
+from flask.sessions import SecureCookieSessionInterface
+
+class ApiNoSessionInterface(SecureCookieSessionInterface):
+    def save_session(self, app, session, response):
+        # Never set a session cookie for API routes (OPTIONS/POST/GET)
+        if request.path.startswith("/api/"):
+            return
+        return super().save_session(app, session, response)
+
+app.session_interface = ApiNoSessionInterface()
 
 # ---- Cookies & sessions (built-in Flask cookies, not Flask-Session) ----
 app.config.update(
@@ -49,28 +136,45 @@ app.config.update(
     PREFERRED_URL_SCHEME="https",
 )
 
-# ---- CORS (must be exact domain; no '*') ----
-# Put your real Lovable domain(s) here. You can list both preview and published.
-# ---- CORS ----
-ALLOWED_ORIGINS = [
-    "https://preview--parafix.lovable.app"  # no trailing /
-]
+app.config["SESSION_REFRESH_EACH_REQUEST"] = False
 
-
-CORS(
-    app,
-    supports_credentials=True,  # allow cookies to cross origin
-    resources={r"/api/*": {"origins": ALLOWED_ORIGINS}},
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-    expose_headers=["Set-Cookie"],   # optional; helps tools see cookies
-)
-
-
-# Kill old fat cookie (once)
+# ---- FINAL OVERRIDE: make all /api/* calls stateless + proper CORS ----
 @app.after_request
-def kill_legacy_cookie(resp):
-    resp.delete_cookie("parafix_session", path="/")
+def _final_api_cors_override(resp):
+    try:
+        p = request.path or ""
+        if p.startswith("/api/"):
+            # Always stateless CORS
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            resp.headers["Access-Control-Max-Age"] = "86400"
+            # Strip any credentialed leftovers from other middlewares
+            for h in ("Access-Control-Allow-Credentials", "Access-Control-Expose-Headers", "Set-Cookie"):
+                resp.headers.pop(h, None)
+
+            if request.method == "OPTIONS":
+                # If Flask auto-OPTIONS already fired with 200, force it to be a real preflight
+                resp.status_code = 204
+                resp.set_data(b"")
+                # Optional debug marker (helps confirm this ran)
+                resp.headers["X-Parafix-Preflight"] = "1"
+                # 'Allow' header is not needed for preflight
+                resp.headers.pop("Allow", None)
+    except Exception:
+        pass
+    return resp
+
+
+
+@app.route("/api/analyze", methods=["OPTIONS"])
+def analyze_preflight():
+    resp = make_response("", 204)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    resp.headers["Access-Control-Max-Age"] = "86400"
+    resp.headers["X-Parafix-Preflight"] = "1"   # <— debug
     return resp
 
 # --- File system paths ---
@@ -536,16 +640,12 @@ def index():
 
     return render_template('index.html', is_premium=session.get('is_premium', False))
 # --- JSON API for Lovable (no templates, just JSON) ---
-@app.post("/api/analyze")
-@cross_origin(
-    origins="https://preview--parafix.lovable.app",
-    supports_credentials=True,
-    methods=["POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-    expose_headers=["Set-Cookie"],
-)
+@app.route("/api/analyze", methods=["POST"], provide_automatic_options=False)
 def api_analyze():
     cleanup_static_folder(days=1)
+
+    # Stateless MVP: no session/auth here; wire JWT or header later if needed
+    is_premium = False
 
     file = request.files.get('file')
     if not file or file.filename == '':
@@ -579,8 +679,6 @@ def api_analyze():
         if language not in ['en', 'ru']:
             language = 'en'
 
-        is_premium = bool(session.get('is_premium'))
-
         # Analyze + Report
         analysis = analyze_contract(text, language, is_premium=is_premium)
         report_doc = generate_report_docx(analysis, language)
@@ -604,17 +702,14 @@ def api_analyze():
         if os.path.exists(filepath):
             os.remove(filepath)
 
-        # ⚠️ ВАЖНО: вместо жирной cookie — сохраняем JSON на диск и кладём в сессию только маленький ID
+        # Save analysis JSON to static (client can fetch/download)
         analysis_id = str(uuid.uuid4())[:8]
         json_name = f"analysis_{analysis_id}.json"
         json_path = os.path.join(STATIC_FOLDER, json_name)
         with open(json_path, "w", encoding="utf-8") as jf:
             json.dump(analysis, jf, ensure_ascii=False)
 
-        session["analysis_id"] = analysis_id
-        session["docx_path"] = report_name
-        session["language"] = language
-
+        # Return JSON — CORS headers will be added by @after_request
         return jsonify({
             "analysis": analysis,
             "docx_path": report_name,
@@ -627,6 +722,7 @@ def api_analyze():
         if os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({"error": f"Error processing contract: {str(e)}"}), 500
+
 
 
 @app.get("/api/analysis/latest")
@@ -674,6 +770,7 @@ def version():
         commit=BUILD,
         routes=sorted(r.rule for r in app.url_map.iter_rules())
     )
+       
 
 
 if __name__ == '__main__':

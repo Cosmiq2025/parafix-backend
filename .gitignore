@@ -28,3 +28,4 @@ static/*
 en_core_web_sm/
 ru_core_news_sm/
 *.cache/
+cookies.txt
